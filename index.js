@@ -31,6 +31,23 @@ async function startServer() {
       res.send("AssetVerse Backend Running");
     });
 
+    // Get all assets
+app.get("/assets", async (req, res) => {
+  try {
+    const assets = await assetsCollection.find({}).toArray();
+    res.send(assets);
+  } catch (err) {
+    res.status(500).send({ error: "Failed to fetch assets" });
+  }
+});
+
+
+
+
+
+
+
+
     app.post('/user',async(req,res)=>{
       const userData=req.body
       userData.created_at= new Date().toISOString()
@@ -73,47 +90,34 @@ console.log(query,alreadyExists)
     // POST /assets
 app.post("/assets", async (req, res) => {
   try {
-    const {
-      productName,
-      productImage,
-      productType,
-      productQuantity,
-      hrEmail,
-      companyName
-    } = req.body;
+    const { productName, productImage, productType, productQuantity, hrEmail, companyName } = req.body;
 
-    if (!productName || !productQuantity || !productType) {
-      return res.status(400).send({ error: "Name, quantity, and type are required" });
+    if (!productName || !productQuantity || !productType || !hrEmail) {
+      return res.status(400).send({ error: "All fields required including hrEmail" });
     }
 
     const asset = {
       productName,
-      productImage: productImage || "",
-      productType, // "Returnable" or "Non-returnable"
+      productImage,
+      productType,
       productQuantity: parseInt(productQuantity),
-      availableQuantity: parseInt(productQuantity), // Initially all available
+      availableQuantity: parseInt(productQuantity),
       dateAdded: new Date(),
-      hrEmail: hrEmail || "", // HR who added this
-      companyName: companyName || "",
+      hrEmail,
+      companyName,
     };
 
     const result = await assetsCollection.insertOne(asset);
     res.send({ success: true, asset: result });
+
   } catch (error) {
     console.error(error);
-    res.status(500).send({ success: false, error: "Internal Server Error" });
+    res.status(500).send({ success: false });
   }
 });
 
-// Get all assets
-app.get("/assets", async (req, res) => {
-  try {
-    const assets = await assetsCollection.find({}).toArray();
-    res.send(assets);
-  } catch (err) {
-    res.status(500).send({ error: "Failed to fetch assets" });
-  }
-});
+
+
 
 
 app.delete("/assets/:id", async (req, res) => {
@@ -189,6 +193,7 @@ app.post("/requests", async (req, res) => {
 });
 
 
+
 app.get("/hr-requests/:hrEmail", async (req, res) => {
   try {
     const hrEmail = req.params.hrEmail;
@@ -200,25 +205,23 @@ app.get("/hr-requests/:hrEmail", async (req, res) => {
 
     res.send({ success: true, requests });
   } catch (err) {
-    res.status(500).send({ success: false });
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to fetch HR requests" });
   }
 });
+
 
 
 app.put("/requests/approve/:id", async (req, res) => {
   try {
     const requestId = req.params.id;
-
-    // Find request
-    const request = await requestsCollection.findOne({
-      _id: new ObjectId(requestId),
-    });
+    const request = await requestsCollection.findOne({ _id: new ObjectId(requestId) });
 
     if (!request) {
       return res.status(404).send({ success: false, message: "Request not found" });
     }
 
-    // Deduct asset quantity
+    // Deduct quantity
     await assetsCollection.updateOne(
       { _id: new ObjectId(request.assetId) },
       { $inc: { availableQuantity: -1 } }
@@ -235,7 +238,7 @@ app.put("/requests/approve/:id", async (req, res) => {
       }
     );
 
-    // Add asset to employee's asset list
+    // Add asset to employee
     await usersCollection.updateOne(
       { email: request.requesterEmail },
       {
@@ -249,21 +252,20 @@ app.put("/requests/approve/:id", async (req, res) => {
       }
     );
 
-    // Assign HR to employee if not done yet
+    // Assign HR if not already assigned
     await usersCollection.updateOne(
-      { email: request.requesterEmail, assignedHR: { $exists: false } },
-      {
-        $set: { assignedHR: request.hrEmail },
-      }
+      { email: request.requesterEmail },
+      { $set: { assignedHR: request.hrEmail } }
     );
 
-    res.send({ success: true, message: "Request approved successfully" });
+    res.send({ success: true });
 
   } catch (err) {
     console.error(err);
-    res.status(500).send({ success: false, message: "Failed to approve request" });
+    res.status(500).send({ success: false });
   }
 });
+
 
 
 
@@ -333,22 +335,7 @@ app.get("/team-hrs/:employeeEmail", async (req, res) => {
 });
 
 
-// Get all requests for a specific HR
-app.get("/hr-requests/:hrEmail", async (req, res) => {
-  try {
-    const hrEmail = req.params.hrEmail;
 
-    // Find all requests where this HR is assigned
-    const requests = await requestsCollection
-      .find({ hrEmail })
-      .toArray();
-
-    res.send({ success: true, requests });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch HR requests" });
-  }
-});
 
 app.put("/requests/reject/:id", async (req, res) => {
   try {
@@ -371,49 +358,84 @@ app.put("/requests/reject/:id", async (req, res) => {
 });
 
 
-
-// Approve / Reject Request
-app.patch("/requests/update/:id", async (req, res) => {
+app.get("/hr/team-members/:hrEmail", async (req, res) => {
   try {
-    const id = req.params.id;
-    const { status, hrEmail } = req.body;
+    const hrEmail = req.params.hrEmail;
 
-    if (!["approved", "rejected"].includes(status)) {
-      return res.status(400).send({ success: false, message: "Invalid status" });
-    }
+    // find employees under this HR
+    const employees = await usersCollection
+      .find({ assignedHR: hrEmail })
+      .project({ name: 1, email: 1, photo: 1, myAssets: 1, joinDate: 1 })
+      .toArray();
 
-    // Update request
-    const result = await requestsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      {
-        $set: {
-          requestStatus: status,
-          processedBy: hrEmail,
-          approvalDate: new Date()
-        }
-      }
-    );
+    // map asset count
+    const employeeList = employees.map(emp => ({
+      _id: emp._id,
+      name: emp.name,
+      email: emp.email,
+      photo: emp.photo || "",
+      joinDate: emp.joinDate,
+      assetsCount: emp.myAssets ? emp.myAssets.length : 0
+    }));
 
-    if (status === "approved") {
-      // Assign employee under HR
-      const reqData = await requestsCollection.findOne({ _id: new ObjectId(id) });
-
-      await usersCollection.updateOne(
-        { email: reqData.requesterEmail },
-        {
-          $addToSet: { assignedHRs: reqData.hrEmail } // multiple HR support
-        }
-      );
-    }
-
-    res.send({ success: true });
+    res.send({ success: true, employees: employeeList });
   } catch (err) {
     console.error(err);
-    res.status(500).send({ success: false, message: "Failed to update request" });
+    res.status(500).send({ success: false, message: "Failed to fetch employees" });
   }
 });
 
 
+app.put("/hr/remove-employee/:id", async (req, res) => {
+  try {
+    const empId = req.params.id;
+    const { hrEmail } = req.body;
+
+    await usersCollection.updateOne(
+      { _id: new ObjectId(empId), assignedHR: hrEmail },
+      { $unset: { assignedHR: "" } }
+    );
+
+    res.send({ success: true, message: "Employee removed from team" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false });
+  }
+});
+
+
+app.get("/employee/assets/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+
+    // Find assets assigned to this employee
+    const assets = await assetsCollection
+      .find({ assignedTo: email }) // assuming asset has assignedTo field
+      .toArray();
+
+    res.send({ success: true, assets });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to fetch assets" });
+  }
+});
+
+
+app.get("/users/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) {
+      return res.status(404).send({ message: "User not found" });
+    }
+
+    res.send(user);
+  } catch (error) {
+    res.status(500).send({ message: "Server error" });
+  }
+});
 
 
   
