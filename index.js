@@ -116,6 +116,38 @@ app.get("/assets", async (req, res) => {
 });
 
 
+app.delete("/assets/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await assetsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    res.send({ success: true, result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to delete asset" });
+  }
+});
+
+
+app.put("/assets/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedData = req.body;
+
+    const result = await assetsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedData }
+    );
+
+    res.send({ success: true, result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to update asset" });
+  }
+});
+
+
+
 app.post("/requests", async (req, res) => {
   try {
     const {
@@ -155,6 +187,84 @@ app.post("/requests", async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to create request" });
   }
 });
+
+
+app.get("/hr-requests/:hrEmail", async (req, res) => {
+  try {
+    const hrEmail = req.params.hrEmail;
+
+    const requests = await requestsCollection
+      .find({ hrEmail })
+      .sort({ requestDate: -1 })
+      .toArray();
+
+    res.send({ success: true, requests });
+  } catch (err) {
+    res.status(500).send({ success: false });
+  }
+});
+
+
+app.put("/requests/approve/:id", async (req, res) => {
+  try {
+    const requestId = req.params.id;
+
+    // Find request
+    const request = await requestsCollection.findOne({
+      _id: new ObjectId(requestId),
+    });
+
+    if (!request) {
+      return res.status(404).send({ success: false, message: "Request not found" });
+    }
+
+    // Deduct asset quantity
+    await assetsCollection.updateOne(
+      { _id: new ObjectId(request.assetId) },
+      { $inc: { availableQuantity: -1 } }
+    );
+
+    // Approve request
+    await requestsCollection.updateOne(
+      { _id: new ObjectId(requestId) },
+      {
+        $set: {
+          requestStatus: "approved",
+          approvalDate: new Date(),
+        },
+      }
+    );
+
+    // Add asset to employee's asset list
+    await usersCollection.updateOne(
+      { email: request.requesterEmail },
+      {
+        $push: {
+          myAssets: {
+            assetId: request.assetId,
+            assetName: request.assetName,
+            dateAssigned: new Date(),
+          },
+        },
+      }
+    );
+
+    // Assign HR to employee if not done yet
+    await usersCollection.updateOne(
+      { email: request.requesterEmail, assignedHR: { $exists: false } },
+      {
+        $set: { assignedHR: request.hrEmail },
+      }
+    );
+
+    res.send({ success: true, message: "Request approved successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to approve request" });
+  }
+});
+
 
 
 // Get employee requests
@@ -239,6 +349,27 @@ app.get("/hr-requests/:hrEmail", async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to fetch HR requests" });
   }
 });
+
+app.put("/requests/reject/:id", async (req, res) => {
+  try {
+    const requestId = req.params.id;
+
+    await requestsCollection.updateOne(
+      { _id: new ObjectId(requestId) },
+      {
+        $set: {
+          requestStatus: "rejected",
+          approvalDate: null,
+        },
+      }
+    );
+
+    res.send({ success: true, message: "Request rejected" });
+  } catch (err) {
+    res.status(500).send({ success: false });
+  }
+});
+
 
 
 // Approve / Reject Request
