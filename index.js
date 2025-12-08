@@ -41,12 +41,64 @@ app.get("/assets", async (req, res) => {
   }
 });
 
+// POST /requests
+app.post("/requests", async (req, res) => {
+  try {
+    const {
+      assetId,
+      assetName,
+      assetType,
+      requesterName,
+      requesterEmail,
+      hrEmail,
+      companyName,
+      note,
+    } = req.body;
+
+    if (!assetId || !requesterEmail) {
+      return res.status(400).send({ success: false, message: "Required fields missing" });
+    }
+
+    const requestDoc = {
+      assetId: new ObjectId(assetId),
+      assetName,
+      assetType,
+      requesterName,
+      requesterEmail,
+      hrEmail: hrEmail || "",
+      companyName: companyName || "",
+      note: note || "",
+      requestDate: new Date(),
+      approvalDate: null,
+      requestStatus: "pending",
+      processedBy: ""
+    };
+
+    const result = await requestsCollection.insertOne(requestDoc);
+
+    res.status(201).send({ success: true, requestId: result.insertedId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to create request" });
+  }
+});
 
 
+     app.get("/packages", async (req, res) => {
+      try {
+        const packages = await packagesCollection.find().toArray();
+        res.send(packages);
+      } catch (error) {
+        console.error("Failed to fetch packages:", error);
+        res.status(500).send({ error: "Failed to fetch packages" });
+      }
+    });
 
-
-
-
+        app.get('/user/role/:email',async (req,res)=>{
+      const email = req.params.email
+      const result = await usersCollection.findOne({email})
+      res.send({role: result?.role})
+    })
 
     app.post('/user',async(req,res)=>{
       const userData=req.body
@@ -70,24 +122,7 @@ console.log(query,alreadyExists)
       res.send(result)
     })
 
-       app.get("/packages", async (req, res) => {
-      try {
-        const packages = await packagesCollection.find().toArray();
-        res.send(packages);
-      } catch (error) {
-        console.error("Failed to fetch packages:", error);
-        res.status(500).send({ error: "Failed to fetch packages" });
-      }
-    });
-
-
-    app.get('/user/role/:email',async (req,res)=>{
-      const email = req.params.email
-      const result = await usersCollection.findOne({email})
-      res.send({role: result?.role})
-    })
-
-    // POST /assets
+        // POST /assets
 app.post("/assets", async (req, res) => {
   try {
     const { productName, productImage, productType, productQuantity, hrEmail, companyName } = req.body;
@@ -115,6 +150,48 @@ app.post("/assets", async (req, res) => {
     res.status(500).send({ success: false });
   }
 });
+
+// GET assets by HR email
+app.get("/assets/:email", async (req, res) => {
+  try {
+    const hrEmail = req.params.email;
+
+    console.log("📥 HR email received:", hrEmail);
+
+    // FILTER assets by hrEmail
+    const assets = await assetsCollection
+      .find({ hrEmail })
+      .toArray();
+
+    console.log("📤 Assets found:", assets.length);
+
+    res.send(assets);
+
+  } catch (err) {
+    console.error("❌ Error fetching assets:", err);
+    res.status(500).json({ error: "Failed to fetch assets" });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
 
 
 
@@ -152,45 +229,7 @@ app.put("/assets/:id", async (req, res) => {
 
 
 
-app.post("/requests", async (req, res) => {
-  try {
-    const {
-      assetId,
-      assetName,
-      assetType,
-      requesterName,
-      requesterEmail,
-      hrEmail,
-      companyName,
-      note,
-    } = req.body;
 
-    if (!assetId || !requesterEmail) {
-      return res.status(400).send({ success: false, message: "Required fields missing" });
-    }
-
-    const requestDoc = {
-      assetId: new ObjectId(assetId),
-      assetName,
-      assetType,
-      requesterName,
-      requesterEmail,
-      hrEmail: hrEmail || "",
-      companyName: companyName || "",
-      note: note || "",
-      requestDate: new Date(),
-      approvalDate: null,
-      requestStatus: "pending",
-      processedBy: ""
-    };
-
-    const result = await requestsCollection.insertOne(requestDoc);
-    res.status(201).send({ success: true, requestId: result.insertedId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to create request" });
-  }
-});
 
 
 
