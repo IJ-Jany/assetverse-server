@@ -173,30 +173,6 @@ app.get("/assets/:email", async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-  
-
-
-
-
-
-
-
-
-
-
 app.delete("/assets/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -208,7 +184,6 @@ app.delete("/assets/:id", async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to delete asset" });
   }
 });
-
 
 app.put("/assets/:id", async (req, res) => {
   try {
@@ -227,11 +202,50 @@ app.put("/assets/:id", async (req, res) => {
   }
 });
 
+app.get("/hr/team-members/:hrEmail", async (req, res) => {
+  try {
+    const hrEmail = req.params.hrEmail;
+
+    // find employees under this HR
+    const employees = await usersCollection
+      .find({ assignedHR: hrEmail })
+      .project({ name: 1, email: 1, photo: 1, myAssets: 1, joinDate: 1 })
+      .toArray();
+
+    // map asset count
+    const employeeList = employees.map(emp => ({
+      _id: emp._id,
+      name: emp.name,
+      email: emp.email,
+      photo: emp.photo || "",
+      joinDate: emp.joinDate,
+      assetsCount: emp.myAssets ? emp.myAssets.length : 0
+    }));
+
+    res.send({ success: true, employees: employeeList });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to fetch employees" });
+  }
+});
 
 
+app.put("/hr/remove-employee/:id", async (req, res) => {
+  try {
+    const empId = req.params.id;
+    const { hrEmail } = req.body;
 
+    await usersCollection.updateOne(
+      { _id: new ObjectId(empId), assignedHR: hrEmail },
+      { $unset: { assignedHR: "" } }
+    );
 
-
+    res.send({ success: true, message: "Employee removed from team" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false });
+  }
+});
 
 app.get("/hr-requests/:hrEmail", async (req, res) => {
   try {
@@ -249,8 +263,6 @@ app.get("/hr-requests/:hrEmail", async (req, res) => {
   }
 });
 
-
-
 app.put("/requests/approve/:id", async (req, res) => {
   try {
     const requestId = req.params.id;
@@ -260,13 +272,13 @@ app.put("/requests/approve/:id", async (req, res) => {
       return res.status(404).send({ success: false, message: "Request not found" });
     }
 
-    // Deduct quantity
+ 
     await assetsCollection.updateOne(
       { _id: new ObjectId(request.assetId) },
       { $inc: { availableQuantity: -1 } }
     );
 
-    // Approve request
+
     await requestsCollection.updateOne(
       { _id: new ObjectId(requestId) },
       {
@@ -277,7 +289,6 @@ app.put("/requests/approve/:id", async (req, res) => {
       }
     );
 
-    // Add asset to employee
     await usersCollection.updateOne(
       { email: request.requesterEmail },
       {
@@ -291,7 +302,7 @@ app.put("/requests/approve/:id", async (req, res) => {
       }
     );
 
-    // Assign HR if not already assigned
+   
     await usersCollection.updateOne(
       { email: request.requesterEmail },
       { $set: { assignedHR: request.hrEmail } }
@@ -304,6 +315,42 @@ app.put("/requests/approve/:id", async (req, res) => {
     res.status(500).send({ success: false });
   }
 });
+
+app.put("/requests/reject/:id", async (req, res) => {
+  try {
+    const requestId = req.params.id;
+
+    await requestsCollection.updateOne(
+      { _id: new ObjectId(requestId) },
+      {
+        $set: {
+          requestStatus: "rejected",
+          approvalDate: null,
+        },
+      }
+    );
+
+    res.send({ success: true, message: "Request rejected" });
+  } catch (err) {
+    res.status(500).send({ success: false });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
 
 
 
@@ -370,75 +417,6 @@ app.get("/team-hrs/:employeeEmail", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send({ success: false, message: "Failed to fetch HRs" });
-  }
-});
-
-
-
-
-app.put("/requests/reject/:id", async (req, res) => {
-  try {
-    const requestId = req.params.id;
-
-    await requestsCollection.updateOne(
-      { _id: new ObjectId(requestId) },
-      {
-        $set: {
-          requestStatus: "rejected",
-          approvalDate: null,
-        },
-      }
-    );
-
-    res.send({ success: true, message: "Request rejected" });
-  } catch (err) {
-    res.status(500).send({ success: false });
-  }
-});
-
-
-app.get("/hr/team-members/:hrEmail", async (req, res) => {
-  try {
-    const hrEmail = req.params.hrEmail;
-
-    // find employees under this HR
-    const employees = await usersCollection
-      .find({ assignedHR: hrEmail })
-      .project({ name: 1, email: 1, photo: 1, myAssets: 1, joinDate: 1 })
-      .toArray();
-
-    // map asset count
-    const employeeList = employees.map(emp => ({
-      _id: emp._id,
-      name: emp.name,
-      email: emp.email,
-      photo: emp.photo || "",
-      joinDate: emp.joinDate,
-      assetsCount: emp.myAssets ? emp.myAssets.length : 0
-    }));
-
-    res.send({ success: true, employees: employeeList });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch employees" });
-  }
-});
-
-
-app.put("/hr/remove-employee/:id", async (req, res) => {
-  try {
-    const empId = req.params.id;
-    const { hrEmail } = req.body;
-
-    await usersCollection.updateOne(
-      { _id: new ObjectId(empId), assignedHR: hrEmail },
-      { $unset: { assignedHR: "" } }
-    );
-
-    res.send({ success: true, message: "Employee removed from team" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false });
   }
 });
 
