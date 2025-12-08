@@ -263,59 +263,6 @@ app.get("/hr-requests/:hrEmail", async (req, res) => {
   }
 });
 
-app.put("/requests/approve/:id", async (req, res) => {
-  try {
-    const requestId = req.params.id;
-    const request = await requestsCollection.findOne({ _id: new ObjectId(requestId) });
-
-    if (!request) {
-      return res.status(404).send({ success: false, message: "Request not found" });
-    }
-
- 
-    await assetsCollection.updateOne(
-      { _id: new ObjectId(request.assetId) },
-      { $inc: { availableQuantity: -1 } }
-    );
-
-
-    await requestsCollection.updateOne(
-      { _id: new ObjectId(requestId) },
-      {
-        $set: {
-          requestStatus: "approved",
-          approvalDate: new Date(),
-        },
-      }
-    );
-
-    await usersCollection.updateOne(
-      { email: request.requesterEmail },
-      {
-        $push: {
-          myAssets: {
-            assetId: request.assetId,
-            assetName: request.assetName,
-            dateAssigned: new Date(),
-          },
-        },
-      }
-    );
-
-   
-    await usersCollection.updateOne(
-      { email: request.requesterEmail },
-      { $set: { assignedHR: request.hrEmail } }
-    );
-
-    res.send({ success: true });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false });
-  }
-});
-
 app.put("/requests/reject/:id", async (req, res) => {
   try {
     const requestId = req.params.id;
@@ -335,6 +282,99 @@ app.put("/requests/reject/:id", async (req, res) => {
     res.status(500).send({ success: false });
   }
 });
+
+app.put("/requests/approve/:id", async (req, res) => {
+  try {
+    const requestId = req.params.id;
+    const request = await requestsCollection.findOne({ _id: new ObjectId(requestId) });
+
+    if (!request) {
+      return res.status(404).send({ success: false, message: "Request not found" });
+    }
+
+    // ✅ Check total employees assigned to this HR
+    const employeeCount = await usersCollection.countDocuments({ assignedHR: request.hrEmail });
+    const MAX_EMPLOYEES = 5;
+
+    if (employeeCount >= MAX_EMPLOYEES) {
+      return res.status(400).send({
+        success: false,
+        message: "Cannot accept request: employee limit reached. Upgrade your package."
+      });
+    }
+
+    // ✅ Deduct asset quantity and assign to employee
+    await assetsCollection.updateOne(
+      { _id: new ObjectId(request.assetId) },
+      {
+        $inc: { availableQuantity: -1 },
+        $set: {
+          assignedTo: request.requesterEmail,
+          assignmentDate: new Date()
+        }
+      }
+    );
+
+
+    // ✅ Approve request
+    await requestsCollection.updateOne(
+      { _id: new ObjectId(requestId) },
+      {
+        $set: {
+          requestStatus: "approved",
+          approvalDate: new Date(),
+        },
+      }
+    );
+
+    // ✅ Add asset to employee
+    await usersCollection.updateOne(
+      { email: request.requesterEmail },
+      {
+        $push: {
+          myAssets: {
+            assetId: request.assetId,
+            assetName: request.assetName,
+             assetType: request.assetType,
+        assetImage: request.assetImage || "", // if available
+        companyName: request.companyName || "",
+        assignmentDate: new Date(),
+        status: "assigned",
+          },
+        },
+      }
+    );
+
+    // ✅ Assign HR if not already assigned
+    await usersCollection.updateOne(
+      { email: request.requesterEmail },
+      { $set: { assignedHR: request.hrEmail, joinDate: new Date() } }
+    );
+
+    res.send({ success: true, message: "Request approved successfully!" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Error approving request" });
+  }
+});
+
+app.get("/employee/assets/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+    const user = await usersCollection.findOne({ email });
+
+    if (!user) return res.send({ success: true, assets: [] });
+
+    // Return the myAssets array
+    res.send({ success: true, assets: user.myAssets || [] });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to fetch assets" });
+  }
+});
+
+
 
 
 
@@ -421,21 +461,6 @@ app.get("/team-hrs/:employeeEmail", async (req, res) => {
 });
 
 
-app.get("/employee/assets/:email", async (req, res) => {
-  try {
-    const email = req.params.email;
-
-    // Find assets assigned to this employee
-    const assets = await assetsCollection
-      .find({ assignedTo: email }) // assuming asset has assignedTo field
-      .toArray();
-
-    res.send({ success: true, assets });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch assets" });
-  }
-});
 
 
 app.get("/users/:email", async (req, res) => {
