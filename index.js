@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import Stripe from "stripe";
 import { MongoClient, ObjectId } from "mongodb";
 
 
@@ -11,6 +12,7 @@ const PORT = process.env.PORT || 5001;
 
 app.use(cors());
 app.use(express.json());
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // MongoDB  connection
 const client = new MongoClient(process.env.MONGO_URI);
@@ -341,15 +343,18 @@ app.put("/requests/approve/:id", async (req, res) => {
       return res.status(404).send({ success: false, message: "Asset not found" });
     }
 
-    // Check HR employee limit
-    const employeeCount = await usersCollection.countDocuments({ assignedHR: request.hrEmail });
-    const MAX_EMPLOYEES = 5;
-    if (employeeCount >= MAX_EMPLOYEES) {
-      return res.status(400).send({
-        success: false,
-        message: "Cannot accept request: employee limit reached. Upgrade your package."
-      });
-    }
+    // Check HR employee limit using packageLimit
+const hr = await usersCollection.findOne({ email: request.hrEmail });
+const MAX_EMPLOYEES = hr?.packageLimit || 5;
+
+const employeeCount = await usersCollection.countDocuments({ assignedHR: request.hrEmail });
+if (employeeCount >= MAX_EMPLOYEES) {
+  return res.status(400).send({
+    success: false,
+    message: `Cannot accept request: employee limit reached. Upgrade your package. Current limit: ${MAX_EMPLOYEES}`
+  });
+}
+
 
     // Deduct availableQuantity of asset
     await assetsCollection.updateOne(
@@ -533,7 +538,145 @@ app.get("/upcoming-birthdays", async (req, res) => {
 });
 
 
+//payment endpoints
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const { name, price, hrEmail, packageId } = req.body;
 
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: { name },
+            unit_amount: price * 100,
+          },
+          quantity: 1,
+        },
+      ],
+
+      metadata: {
+        hrEmail,
+        packageId,
+      },
+
+      success_url: `http://localhost:5173/pay-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `http://localhost:5173/dashboard/upgrade-package`,
+    });
+
+    res.send({ url: session.url });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ error: "Stripe error" });
+  }
+});
+
+
+app.post("/verify-payment", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (session.payment_status === "paid") {
+      const hrEmail = session.metadata.hrEmail;
+      const packageId = session.metadata.packageId;
+
+      // Update HR package inside usersCollection
+      await usersCollection.updateOne(
+        { email: hrEmail },
+        {
+          $set: {
+            packageId: packageId,
+            packagePurchasedAt: new Date(),
+          }
+        }
+      );
+
+      return res.send({ success: true });
+    }
+
+    res.send({ success: false });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({ success: false });
+  }
+});
+
+app.get("/users/:email", async (req, res) => {
+  try {
+    const email = req.params.email;
+
+    const user = await usersCollection.findOne(
+      { email },
+      {
+        projection: {
+          name: 1,
+          email: 1,
+          role: 1,
+          profileImage: 1,
+          packageId: 1,          // Add this
+          packagePurchasedAt: 1  // Add this
+        }
+      }
+    );
+
+    if (!user) {
+      return res.status(404).send({ success: false, message: "User not found" });
+    }
+
+    res.send({ success: true, user });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Server error" });
+  }
+});
+
+app.get("/packages/:id", async (req, res) => {
+  try {
+    const packageId = req.params.id;
+    const pkg = await packagesCollection.findOne({ _id: new ObjectId(packageId) });
+    if (!pkg) return res.status(404).send({ message: "Package not found" });
+    res.send(pkg);
+  } catch (err) {
+    res.status(500).send({ message: "Server error" });
+  }
+});
+
+
+// GET /assets?page=1&limit=10
+app.get("/assets", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;   // Default page = 1
+    const limit = parseInt(req.query.limit) || 10; // Default limit = 10
+    const skip = (page - 1) * limit;
+
+    // Total assets count
+    const totalItems = await assetsCollection.countDocuments();
+
+    // Fetch assets with pagination
+    const assets = await assetsCollection
+      .find({})
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    res.send({
+      success: true,
+      page,
+      totalPages: Math.ceil(totalItems / limit),
+      totalItems,
+      assets
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to fetch assets" });
+  }
+});
 
 
 
@@ -588,28 +731,6 @@ app.get("/team-members/:employeeEmail", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send({ success: false, message: "Failed to fetch team members" });
-  }
-});
-
-
-
-
-
-
-
-app.get("/users/:email", async (req, res) => {
-  try {
-    const email = req.params.email;
-
-    const user = await usersCollection.findOne({ email });
-
-    if (!user) {
-      return res.status(404).send({ message: "User not found" });
-    }
-
-    res.send(user);
-  } catch (error) {
-    res.status(500).send({ message: "Server error" });
   }
 });
 
