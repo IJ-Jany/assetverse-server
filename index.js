@@ -2,10 +2,13 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import Stripe from "stripe";
-import { MongoClient, ObjectId } from "mongodb";
-
-
+import admin from 'firebase-admin';
+import { MongoClient,ServerApiVersion, ObjectId } from "mongodb";
 dotenv.config();
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
+  'utf-8'
+)
+
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -17,10 +20,47 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 // MongoDB  connection
 const client = new MongoClient(process.env.MONGO_URI);
 
+// jwt middlewares
+const verifyJWT = async (req, res, next) => {
+  const token = req?.headers?.authorization?.split(' ')[1]
+  console.log(token)
+  if (!token) return res.status(401).send({ message: 'Unauthorized Access!' })
+  try {
+    const decoded = await admin.auth().verifyIdToken(token)
+    req.tokenEmail = decoded.email
+    console.log(decoded)
+    next()
+  } catch (err) {
+    console.log(err)
+    return res.status(401).send({ message: 'Unauthorized Access!', err })
+  }
+}
+
+ // role middlewares
+    const verifyHR = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'hr')
+        return res
+          .status(403)
+          .send({ message: 'hr only Actions!', role: user?.role })
+
+      next()
+    }
+    const verifyEmployee = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'employee')
+        return res
+          .status(403)
+          .send({ message: 'employee only Actions!', role: user?.role })
+
+      next()
+    }
 
 async function updateMyAssets(db) {
-  const usersCollection = db.collection("usersCollection");
-  const assetsCollection = db.collection("assets");
+  // const usersCollection = db.collection("usersCollection");
+  // const assetsCollection = db.collection("assets");
 
   const users = await usersCollection.find({}).toArray();
 
@@ -68,14 +108,14 @@ async function startServer() {
     });
 
     // Get all assets
-app.get("/assets", async (req, res) => {
-  try {
-    const assets = await assetsCollection.find({}).toArray();
-    res.send(assets);
-  } catch (err) {
-    res.status(500).send({ error: "Failed to fetch assets" });
-  }
-});
+// app.get("/assets", async (req, res) => {
+//   try {
+//     const assets = await assetsCollection.find({}).toArray();
+//     res.send(assets);
+//   } catch (err) {
+//     res.status(500).send({ error: "Failed to fetch assets" });
+//   }
+// });
 
 // POST /requests
 app.post("/requests", async (req, res) => {
@@ -410,8 +450,6 @@ app.get("/employee/assets/:email", async (req, res) => {
     const user = await usersCollection.findOne({ email });
 
     if (!user) return res.send({ success: true, assets: [] });
-
-    // Return the myAssets array
     res.send({ success: true, assets: user.myAssets || [] });
   } catch (err) {
     console.error(err);
@@ -474,7 +512,7 @@ app.get("/my-team/:email", async (req, res) => {
   }
 });
 
-// Get HRs for an employee based on approved requests
+
 app.get("/team-hrs/:employeeEmail", async (req, res) => {
   try {
     const employeeEmail = req.params.employeeEmail;
@@ -501,7 +539,27 @@ app.get("/team-hrs/:employeeEmail", async (req, res) => {
   }
 });
 
-// GET upcoming birthdays for employees in the same company
+app.post("/assigned-users", async (req, res) => {
+  try {
+    const assignedData = {
+      hrEmail: req.body.hrEmail,
+      employeeEmail: req.body.employeeEmail,
+      employeeName: req.body.employeeName,
+      companyName: req.body.companyName,
+      assetName: req.body.assetName,
+      assignedDate: req.body.assignedDate,
+    };
+
+    const result = await assignedUsersCollection.insertOne(assignedData);
+
+    res.send({ success: true, result });
+  } catch (error) {
+    console.error("Insert Assigned User Error:", error);
+    res.status(500).send({ success: false, message: "Failed to assign user" });
+  }
+});
+
+
 app.get("/upcoming-birthdays", async (req, res) => {
   try {
     const { email } = req.query;
@@ -538,7 +596,6 @@ app.get("/upcoming-birthdays", async (req, res) => {
 });
 
 
-//payment endpoints
 app.post('/create-checkout-session', async (req, res) => {
   try {
     const { name, price, hrEmail, packageId } = req.body;
@@ -584,6 +641,12 @@ app.post("/verify-payment", async (req, res) => {
     if (session.payment_status === "paid") {
       const hrEmail = session.metadata.hrEmail;
       const packageId = session.metadata.packageId;
+        const pkg = await packagesCollection.findOne({
+        _id: new ObjectId(packageId)
+      });
+       if (!pkg) {
+        return res.status(404).send({ success: false, message: "Package not found" });
+      }
 
       // Update HR package inside usersCollection
       await usersCollection.updateOne(
@@ -592,6 +655,7 @@ app.post("/verify-payment", async (req, res) => {
           $set: {
             packageId: packageId,
             packagePurchasedAt: new Date(),
+              employeeLimit: pkg.employeeLimit   
           }
         }
       );
@@ -648,25 +712,15 @@ app.get("/packages/:id", async (req, res) => {
 });
 
 
-// GET /assets?page=1&limit=10
 app.get("/assets", async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;   // Default page = 1
-    const limit = parseInt(req.query.limit) || 10; // Default limit = 10
+    const page = parseInt(req.query.page) || 1;  
+    const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-
-    // Total assets count
     const totalItems = await assetsCollection.countDocuments();
-
-    // Fetch assets with pagination
-    const assets = await assetsCollection
-      .find({})
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const assets = await assetsCollection.find({}).skip(skip).limit(limit).toArray();
 
     res.send({
-      success: true,
       page,
       totalPages: Math.ceil(totalItems / limit),
       totalItems,
@@ -674,30 +728,10 @@ app.get("/assets", async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch assets" });
+    res.send({ success: false, message: "Failed to fetch assets" });
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-  
-
-
-
-
-
-
-
-
-// Get employee requests
 app.get("/my-requests", async (req, res) => {
   const { email } = req.query;
   try {
@@ -708,20 +742,15 @@ app.get("/my-requests", async (req, res) => {
   }
 });
 
-// Get team members for an employee based on assigned HR
+
 app.get("/team-members/:employeeEmail", async (req, res) => {
   try {
     const employeeEmail = req.params.employeeEmail;
-
-    // 1. Find the HR assigned to this employee
     const employee = await usersCollection.findOne({ email: employeeEmail });
     if (!employee || !employee.assignedHR) {
       return res.send({ success: true, team: [] }); // no HR assigned
     }
-
     const hrEmail = employee.assignedHR;
-
-    // 2. Find all employees under this HR
     const teamMembers = await usersCollection
       .find({ assignedHR: hrEmail })
       .project({ name: 1, email: 1, photo: 1 })
@@ -733,11 +762,6 @@ app.get("/team-members/:employeeEmail", async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to fetch team members" });
   }
 });
-
-
-  
-
-    // Start server
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
