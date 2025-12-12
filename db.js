@@ -9,4 +9,4 @@ await client.connect();
 export const db = client.db("assetverse");
 export const usersCollection = db.collection("usersCollection");
 export const assetsCollection = db.collection("assets");
-// export other collections if needed
+
