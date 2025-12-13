@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { usersCollection } from "./db.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
-const JWT_EXPIRES_IN = "1d"; // 1 day
+const JWT_EXPIRES_IN = "1d"; 
 
 export const login = async (req, res) => {
   const { email, password } = req.body;

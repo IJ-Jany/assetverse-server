@@ -1,13 +1,14 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import Stripe from "stripe";
-import admin from 'firebase-admin';
-import { MongoClient,ServerApiVersion, ObjectId } from "mongodb";
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
+const Stripe =require ("stripe");
+const admin = require("firebase-admin")
+const  { MongoClient,ServerApiVersion, ObjectId } = require("mongodb")
 dotenv.config();
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
   'utf-8'
 )
+
 
 
 const app = express();
@@ -19,6 +20,9 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // MongoDB  connection
 const client = new MongoClient(process.env.MONGO_URI);
+ admin.initializeApp({
+  credential:admin.credential.cert("./serviceAccountKey.json")
+})
 
 // jwt middlewares
 const verifyJWT = async (req, res, next) => {
@@ -36,27 +40,7 @@ const verifyJWT = async (req, res, next) => {
   }
 }
 
- // role middlewares
-    const verifyHR = async (req, res, next) => {
-      const email = req.tokenEmail
-      const user = await usersCollection.findOne({ email })
-      if (user?.role !== 'hr')
-        return res
-          .status(403)
-          .send({ message: 'hr only Actions!', role: user?.role })
 
-      next()
-    }
-    const verifyEmployee = async (req, res, next) => {
-      const email = req.tokenEmail
-      const user = await usersCollection.findOne({ email })
-      if (user?.role !== 'employee')
-        return res
-          .status(403)
-          .send({ message: 'employee only Actions!', role: user?.role })
-
-      next()
-    }
 
 async function updateMyAssets(db) {
   // const usersCollection = db.collection("usersCollection");
@@ -104,6 +88,29 @@ async function startServer() {
     app.get("/", (req, res) => {
       res.send("AssetVerse Backend Running");
     });
+
+     // role middlewares
+    const verifyHR = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      console.log(user)
+      if (user?.role !== 'hr')
+        return res
+          .status(403)
+          .send({ message: 'hr only Actions!', role: user?.role })
+
+      next()
+    }
+    const verifyEmployee = async (req, res, next) => {
+      const email = req.tokenEmail
+      const user = await usersCollection.findOne({ email })
+      if (user?.role !== 'employee')
+        return res
+          .status(403)
+          .send({ message: 'employee only Actions!', role: user?.role })
+
+      next()
+    }
 
 app.post("/requests",verifyJWT,verifyEmployee, async (req, res) => {
   try {
@@ -723,9 +730,12 @@ app.get("/my-requests", async (req, res) => {
     res.status(500).send({ error: "Failed to fetch requests" });
   }
 });
+
+
 app.get("/hr/assets/:hrEmail", verifyJWT, verifyHR, async (req, res) => {
   try {
     const hrEmail = req.params.hrEmail;
+    console.log(hrEmail)
     const assets = await assetsCollection.find({ hrEmail }).toArray();
     res.send({ success: true, assets });
   } catch (err) {
