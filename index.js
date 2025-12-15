@@ -43,8 +43,6 @@ const verifyJWT = async (req, res, next) => {
 
 
 async function updateMyAssets(db) {
-  // const usersCollection = db.collection("usersCollection");
-  // const assetsCollection = db.collection("assets");
 
   const users = await usersCollection.find({}).toArray();
 
@@ -71,7 +69,7 @@ async function updateMyAssets(db) {
       }
     }
   }
-  console.log("✅ All myAssets updated successfully!");
+  console.log("All myAssets updated successfully!");
 }
 
 
@@ -85,6 +83,7 @@ async function startServer() {
      const packagesCollection = db.collection("packages");
      const assetsCollection = db.collection("assets")
       const requestsCollection = db.collection("requests")
+      const assignedUsersCollection = db.collection("assignedUsers");
     app.get("/", (req, res) => {
       res.send("AssetVerse Backend Running");
     });
@@ -112,7 +111,7 @@ async function startServer() {
       next()
     }
 
-app.post("/requests",verifyJWT,verifyEmployee, async (req, res) => {
+app.post("/requests", verifyJWT, verifyEmployee, async (req, res) => {
   try {
     const {
       assetId,
@@ -124,9 +123,18 @@ app.post("/requests",verifyJWT,verifyEmployee, async (req, res) => {
       companyName,
       note,
     } = req.body;
+    if (req.tokenEmail !== requesterEmail) {
+      return res.status(403).send({
+        success: false,
+        message: "Unauthorized requester"
+      });
+    }
 
-    if (!assetId || !requesterEmail) {
-      return res.status(400).send({ success: false, message: "Required fields missing" });
+    if (!assetId || !requesterEmail || !hrEmail) {
+      return res.status(400).send({
+        success: false,
+        message: "assetId, requesterEmail and hrEmail required"
+      });
     }
 
     const requestDoc = {
@@ -135,21 +143,27 @@ app.post("/requests",verifyJWT,verifyEmployee, async (req, res) => {
       assetType,
       requesterName,
       requesterEmail,
-      hrEmail: hrEmail || "",
+      hrEmail,
       companyName: companyName || "",
       note: note || "",
       requestDate: new Date(),
       approvalDate: null,
       requestStatus: "pending",
-      processedBy: ""
+      processedBy: "",
     };
 
     const result = await requestsCollection.insertOne(requestDoc);
 
-    res.status(201).send({ success: true, requestId: result.insertedId });
+    res.send({
+      success: true,
+      requestId: result.insertedId,
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to create request" });
+    console.error("REQUEST CREATE ERROR:", err);
+    res.status(500).send({
+      success: false,
+      message: "Failed to create request",
+    });
   }
 });
 
@@ -226,19 +240,17 @@ app.get("/assets/:email",verifyJWT,verifyEmployee, async (req, res) => {
   try {
     const hrEmail = req.params.email;
 
-    console.log("📥 HR email received:", hrEmail);
-
-    // FILTER assets by hrEmail
+    console.log(" HR email received:", hrEmail);
     const assets = await assetsCollection
       .find({ hrEmail })
       .toArray();
 
-    console.log("📤 Assets found:", assets.length);
+    console.log("Assets found:", assets.length);
 
     res.send(assets);
 
   } catch (err) {
-    console.error("❌ Error fetching assets:", err);
+    console.error("Error fetching assets:", err);
     res.status(500).json({ error: "Failed to fetch assets" });
   }
 });
@@ -272,63 +284,69 @@ app.put("/assets/:id",verifyJWT,verifyHR, async (req, res) => {
   }
 });
 
-app.get("/hr/team-members/:hrEmail",verifyJWT,verifyEmployee, async (req, res) => {
+app.put("/users/:email", async (req, res) => {
   try {
-    const hrEmail = req.params.hrEmail;
+    const email = req.params.email;
+    const { name, photo } = req.body;
 
-    // HR info to get packageLimit & currentEmployees
-    const hr = await usersCollection.findOne({ email: hrEmail });
+    const result = await usersCollection.updateOne(
+      { email },
+      { $set: { name, photo } }
+    );
 
-    // find employees under this HR
-    const employees = await usersCollection
-      .find({ assignedHR: hrEmail })
-      .project({ name: 1, email: 1, photo: 1, myAssets: 1, joinDate: 1 })
-      .toArray();
+    const updatedUser = await usersCollection.findOne({ email });
+    res.send({ success: true, user: updatedUser });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ success: false, message: "Failed to update user" });
+  }
+});
 
-    const employeeList = employees.map(emp => ({
-      _id: emp._id,
-      name: emp.name,
-      email: emp.email,
-      photo: emp.photo || "",
-      joinDate: emp.joinDate || null,
-      assetsCount: emp.myAssets ? emp.myAssets.length : 0
-    }));
+app.delete("/hr/remove-employee/:employeeEmail", verifyJWT, verifyHR, async (req, res) => {
+  try {
+    const hrEmail = req.tokenEmail;
+    const employeeEmail = req.params.employeeEmail;
+ const assignedResult = await assignedUsersCollection.deleteMany({
+      hrEmail,
+      employeeEmail
+    });
+    const user = await usersCollection.findOne({ email: employeeEmail });
 
-    res.send({
-      success: true,
-      employees: employeeList,
-      currentCount: employeeList.length,
-      packageLimit: hr?.packageLimit || 5
+    if (!user) {
+      return res.status(404).send({ success: false, message: "Employee not found" });
+    }
+
+    if (user.assignedHR !== hrEmail) {
+      return res.status(400).send({ success: false, message: "This employee is not assigned to you" });
+    }
+    await usersCollection.updateOne(
+      { email: employeeEmail },
+      { $unset: { assignedHR: "" } }
+    );
+
+    res.send({ 
+      success: true, 
+      message: "Employee removed successfully", 
+      assignmentsRemoved: assignedResult.deletedCount 
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch employees" });
+    console.error("Remove employee error:", err);
+    res.status(500).send({ success: false, message: "Server error" });
   }
 });
 
 
 
-app.put("/hr/remove-employee/:id",verifyJWT,verifyHR, async (req, res) => {
-  try {
-    const empId = req.params.id;
-    const { hrEmail } = req.body;
-
-    await usersCollection.updateOne(
-      { _id: new ObjectId(empId), assignedHR: hrEmail },
-      { $unset: { assignedHR: "",joinDate:""} }
-    );
-
-    res.send({ success: true, message: "Employee removed from team" });
-  } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false });
-  }
-});
-
-app.get("/hr-requests/:hrEmail",verifyJWT,verifyHR, async (req, res) => {
+app.get("/hr-requests/:hrEmail", verifyJWT, verifyHR, async (req, res) => {
   try {
     const hrEmail = req.params.hrEmail;
+    if (req.tokenEmail !== hrEmail) {
+      return res.status(403).send({
+        success: false,
+        message: "Forbidden: email mismatch"
+      });
+    }
 
     const requests = await requestsCollection
       .find({ hrEmail })
@@ -337,10 +355,11 @@ app.get("/hr-requests/:hrEmail",verifyJWT,verifyHR, async (req, res) => {
 
     res.send({ success: true, requests });
   } catch (err) {
-    console.error(err);
-    res.status(500).send({ success: false, message: "Failed to fetch HR requests" });
+    console.error("HR REQUEST FETCH ERROR:", err);
+    res.status(500).send({ success: false });
   }
 });
+
 
 app.put("/requests/reject/:id",verifyJWT,verifyHR, async (req, res) => {
   try {
@@ -366,46 +385,62 @@ app.put("/requests/approve/:id", verifyJWT, verifyHR, async (req, res) => {
   try {
     const requestId = req.params.id;
 
+   
     const request = await requestsCollection.findOne({ _id: new ObjectId(requestId) });
     if (!request) {
       return res.status(404).send({ success: false, message: "Request not found" });
     }
+    let assetId;
+    try {
+      assetId = new ObjectId(request.assetId);
+    } catch {
+      return res.status(400).send({ success: false, message: "Invalid assetId in request" });
+    }
 
-    const asset = await assetsCollection.findOne({ _id: new ObjectId(request.assetId) });
+    const asset = await assetsCollection.findOne({ _id: assetId });
     if (!asset) {
       return res.status(404).send({ success: false, message: "Asset not found" });
     }
 
-    // Check employee limit (you stored employeeLimit)
+    if (!asset.availableQuantity || asset.availableQuantity <= 0) {
+      return res.status(400).send({ success: false, message: "Asset not available" });
+    }
+
+
     const hr = await usersCollection.findOne({ email: request.hrEmail });
-    const MAX_EMPLOYEES = hr?.employeeLimit || 5;    // <-- FIXED
+    const MAX_EMPLOYEES = hr?.employeeLimit || 5;
 
     const employeeCount = await usersCollection.countDocuments({ assignedHR: request.hrEmail });
     if (employeeCount >= MAX_EMPLOYEES) {
       return res.status(400).send({
         success: false,
-        message: `Employee limit reached (${MAX_EMPLOYEES})`
+        message: `Cannot approve. HR employee limit reached (${MAX_EMPLOYEES}).`
       });
     }
 
-    await assetsCollection.updateOne(
-      { _id: asset._id },
+    const assetUpdate = await assetsCollection.updateOne(
+      { _id: assetId, availableQuantity: { $gt: 0 } },
       { $inc: { availableQuantity: -1 } }
     );
 
+    if (assetUpdate.modifiedCount === 0) {
+      return res.status(400).send({ success: false, message: "Asset not available anymore" });
+    }
+
     const approvalDate = new Date();
 
+  
     await requestsCollection.updateOne(
       { _id: request._id },
       { $set: { requestStatus: "approved", approvalDate } }
     );
 
-    await usersCollection.updateOne(
+    const userUpdate = await usersCollection.updateOne(
       { email: request.requesterEmail },
       {
         $push: {
           myAssets: {
-            assetId: asset._id,
+            assetId,
             assetName: asset.productName,
             assetType: asset.productType,
             assetImage: asset.productImage || "",
@@ -414,22 +449,70 @@ app.put("/requests/approve/:id", verifyJWT, verifyHR, async (req, res) => {
             approvalDate,
             status: "approved"
           }
-        }
+        },
+        $set: { assignedHR: request.hrEmail, joinDate: new Date() }
       }
     );
 
-    await usersCollection.updateOne(
-      { email: request.requesterEmail },
-      { $set: { assignedHR: request.hrEmail, joinDate: new Date() } }
-    );
+    if (userUpdate.matchedCount === 0) {
+      return res.status(404).send({ success: false, message: "Employee not found" });
+    }
 
-    res.send({ success: true, message: "Request approved successfully!" });
+    await assignedUsersCollection.insertOne({
+      hrEmail: request.hrEmail,
+      employeeEmail: request.requesterEmail,
+      employeeName: request.requesterName,
+      companyName: request.companyName || "",
+      assetName: asset.productName,
+      assetId,
+      assignedDate: approvalDate,
+      createdAt: new Date(),
+    });
+
+    res.send({ success: true, message: "Request approved & assigned successfully!" });
 
   } catch (err) {
     console.error("APPROVE ERROR:", err);
-    res.status(500).send({ success: false, message: "Error approving request" });
+    res.status(500).send({
+      success: false,
+      message: "Error approving request",
+      error: err.message,
+    });
   }
 });
+
+
+
+app.get("/returnable-assets", verifyJWT, verifyHR, async (req, res) => {
+  try {
+    const hrEmail = req.tokenEmail;
+
+    const assets = await assetsCollection.find({ hrEmail }).toArray();
+
+    let returnable = 0;
+    let nonReturnable = 0;
+
+    assets.forEach(asset => {
+      if (
+        asset.productType &&
+        asset.productType.toLowerCase() === "returnable"
+      ) {
+        returnable++;
+      } else {
+        nonReturnable++;
+      }
+    });
+
+    res.send([
+      { name: "Returnable", value: returnable },
+      { name: "Non-returnable", value: nonReturnable },
+    ]);
+  } catch (err) {
+    console.error("RETURNABLE STATS ERROR:", err);
+    res.status(500).send([]);
+  }
+});
+
 
 
 
@@ -446,7 +529,7 @@ app.get("/employee/assets/:email", async (req, res) => {
   }
 });
 
-app.put("/assets/return/:id",verifyEmployee,verifyJWT, async (req, res) => {
+app.put("/assets/return/:id",verifyJWT,verifyEmployee, async (req, res) => {
   const assetId = req.params.id;
   await usersCollection.updateOne(
     { "myAssets.assetId": new ObjectId(assetId) },
@@ -463,30 +546,42 @@ app.get("/my-team/:email", async (req, res) => {
   try {
     const email = req.params.email;
 
-    // 1. Current user
     const employee = await usersCollection.findOne({ email });
-    if (!employee)
-      return res.send({ success: true, hrs: [], colleagues: [], company: "" });
+    if (!employee) {
+      return res.send({
+        success: true,
+        hrs: [],
+        colleagues: [],
+        company: "",
+      });
+    }
 
     const company = employee.companyName || "";
-
-    // 2. HR list (from approved requests)
     const approvedRequests = await requestsCollection
       .find({ requesterEmail: email, requestStatus: "approved" })
       .project({ hrEmail: 1 })
       .toArray();
 
     const hrEmails = [...new Set(approvedRequests.map(r => r.hrEmail))];
-
     const hrs = await usersCollection
       .find({ email: { $in: hrEmails } })
-      .project({ name: 1, email: 1, photo: 1, companyName: 1, position: 1 })
+      .project({
+        name: 1,
+        email: 1,
+        companyLogo: 1,
+        companyName: 1,
+        position: 1,
+      })
       .toArray();
-
-    // 3. Colleagues from same company
     const colleagues = await usersCollection
       .find({ companyName: company, email: { $ne: email } })
-      .project({ name: 1, email: 1, photo: 1, position: 1, companyName: 1 })
+      .project({
+        name: 1,
+        email: 1,
+        photo: 1,
+        position: 1,
+        companyName: 1,
+      })
       .toArray();
 
     res.send({
@@ -496,26 +591,23 @@ app.get("/my-team/:email", async (req, res) => {
       company,
     });
   } catch (err) {
-    console.log(err);
+    console.error("MY TEAM ERROR:", err);
     res.status(500).send({ success: false });
   }
 });
+
 
 
 app.get("/team-hrs/:employeeEmail", async (req, res) => {
   try {
     const employeeEmail = req.params.employeeEmail;
 
-    // Find all requests made by this employee that are approved
     const approvedRequests = await requestsCollection
       .find({ requesterEmail: employeeEmail, requestStatus: "approved" })
       .project({ hrEmail: 1 })
       .toArray();
 
-    // Extract unique HR emails
     const hrEmails = [...new Set(approvedRequests.map((r) => r.hrEmail))];
-
-    // Get HR details from usersCollection
     const hrList = await usersCollection
       .find({ email: { $in: hrEmails } })
       .project({ name: 1, email: 1, photo: 1 })
@@ -528,15 +620,31 @@ app.get("/team-hrs/:employeeEmail", async (req, res) => {
   }
 });
 
-app.post("/assigned-users",verifyHR,verifyJWT ,async (req, res) => {
+app.post("/assigned-users", verifyJWT, verifyHR, async (req, res) => {
   try {
+    const {
+      hrEmail,
+      employeeEmail,
+      employeeName,
+      companyName,
+      assetName,
+      assignedDate,
+    } = req.body;
+
+    if (!hrEmail || !employeeEmail || !assetName) {
+      return res
+        .status(400)
+        .send({ success: false, message: "Required fields missing" });
+    }
+
     const assignedData = {
-      hrEmail: req.body.hrEmail,
-      employeeEmail: req.body.employeeEmail,
-      employeeName: req.body.employeeName,
-      companyName: req.body.companyName,
-      assetName: req.body.assetName,
-      assignedDate: req.body.assignedDate,
+      hrEmail,
+      employeeEmail,
+      employeeName,
+      companyName,
+      assetName,
+      assignedDate: assignedDate ? new Date(assignedDate) : new Date(),
+      createdAt: new Date(),
     };
 
     const result = await assignedUsersCollection.insertOne(assignedData);
@@ -544,9 +652,12 @@ app.post("/assigned-users",verifyHR,verifyJWT ,async (req, res) => {
     res.send({ success: true, result });
   } catch (error) {
     console.error("Insert Assigned User Error:", error);
-    res.status(500).send({ success: false, message: "Failed to assign user" });
+    res
+      .status(500)
+      .send({ success: false, message: "Failed to assign user" });
   }
 });
+
 
 
 app.get("/upcoming-birthdays", async (req, res) => {
@@ -555,22 +666,19 @@ app.get("/upcoming-birthdays", async (req, res) => {
 
     if (!email) return res.status(400).send({ success: false, message: "Email is required" });
 
-    // 1. Find the current user
+  
     const user = await usersCollection.findOne({ email });
     if (!user || !user.companyName) {
-      return res.send({ success: true, birthdays: [] }); // No company info
+      return res.send({ success: true, birthdays: [] }); 
     }
 
     const companyName = user.companyName;
-    const currentMonth = new Date().getMonth() + 1; // 1-12
-
-    // 2. Find employees in the same company
+    const currentMonth = new Date().getMonth() + 1;
     const employees = await usersCollection
       .find({ companyName })
       .project({ name: 1, email: 1, dob: 1 })
       .toArray();
 
-    // 3. Filter by current month
     const birthdays = employees.filter(emp => {
       if (!emp.dob) return false;
       const dobMonth = new Date(emp.dob).getMonth() + 1;
@@ -636,8 +744,6 @@ app.post("/verify-payment", async (req, res) => {
        if (!pkg) {
         return res.status(404).send({ success: false, message: "Package not found" });
       }
-
-      // Update HR package inside usersCollection
       await usersCollection.updateOne(
         { email: hrEmail },
         {
@@ -672,8 +778,8 @@ app.get("/users/:email", async (req, res) => {
           email: 1,
           role: 1,
           profileImage: 1,
-          packageId: 1,          // Add this
-          packagePurchasedAt: 1  // Add this
+          packageId: 1,          
+          packagePurchasedAt: 1 
         }
       }
     );
@@ -721,7 +827,7 @@ app.get("/assets", async (req, res) => {
   }
 });
 
-app.get("/my-requests", async (req, res) => {
+app.get("/my-requests",verifyJWT,verifyEmployee, async (req, res) => {
   const { email } = req.query;
   try {
     const requests = await requestsCollection.find({ requesterEmail: email }).toArray();
@@ -743,6 +849,78 @@ app.get("/hr/assets/:hrEmail", verifyJWT, verifyHR, async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to fetch HR assets" });
   }
 });
+app.get( "/hr/team-members/:hrEmail",
+  verifyJWT,
+  verifyHR,
+  async (req, res) => {
+    try {
+      const hrEmail = req.params.hrEmail;
+
+      const hr = await usersCollection.findOne({ email: hrEmail });
+
+      const employees = await usersCollection
+        .find({ assignedHR: hrEmail })
+        .project({
+          name: 1,
+          email: 1,
+          photo: 1,
+          myAssets: 1,
+          joinDate: 1,
+        })
+        .toArray();
+
+      const employeeList = employees.map((emp) => ({
+        _id: emp._id,
+        name: emp.name,
+        email: emp.email,
+        photo: emp.photo || "",
+        joinDate: emp.joinDate || null,
+        assetsCount: emp.myAssets?.length || 0,
+      }));
+
+      res.send({
+        success: true,
+        employees: employeeList,
+        currentCount: employeeList.length,
+        packageLimit: hr?.employeeLimit || 5,
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ success: false });
+    }
+  }
+);
+
+
+app.get("/top-assets", verifyJWT, verifyHR, async (req, res) => {
+  try {
+    const hrEmail = req.tokenEmail;
+
+    const requests = await requestsCollection
+      .find({ hrEmail })
+      .toArray();
+
+    const countMap = {};
+
+    requests.forEach(req => {
+      if (!req.assetName) return;
+      countMap[req.assetName] = (countMap[req.assetName] || 0) + 1;
+    });
+
+    const topAssets = Object.entries(countMap)
+      .map(([assetName, requests]) => ({
+        assetName,
+        requests,
+      }))
+      .sort((a, b) => b.requests - a.requests)
+      .slice(0, 5);
+
+    res.send(topAssets);
+  } catch (err) {
+    console.error("TOP ASSETS ERROR:", err);
+    res.status(500).send([]);
+  }
+});
 
 
 
@@ -751,7 +929,7 @@ app.get("/team-members/:employeeEmail", async (req, res) => {
     const employeeEmail = req.params.employeeEmail;
     const employee = await usersCollection.findOne({ email: employeeEmail });
     if (!employee || !employee.assignedHR) {
-      return res.send({ success: true, team: [] }); // no HR assigned
+      return res.send({ success: true, team: [] }); 
     }
     const hrEmail = employee.assignedHR;
     const teamMembers = await usersCollection
