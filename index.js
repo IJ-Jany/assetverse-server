@@ -5,9 +5,7 @@ const Stripe =require ("stripe");
 const admin = require("firebase-admin")
 const  { MongoClient,ServerApiVersion, ObjectId } = require("mongodb")
 dotenv.config();
-const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString(
-  'utf-8'
-)
+
 
 
 
@@ -20,9 +18,12 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // MongoDB  connection
 const client = new MongoClient(process.env.MONGO_URI);
- admin.initializeApp({
-  credential:admin.credential.cert("./serviceAccountKey.json")
-})
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
 
 // jwt middlewares
 const verifyJWT = async (req, res, next) => {
@@ -42,40 +43,40 @@ const verifyJWT = async (req, res, next) => {
 
 
 
-async function updateMyAssets(db) {
+// async function updateMyAssets(db) {
 
-  const users = await usersCollection.find({}).toArray();
+//   const users = await usersCollection.find({}).toArray();
 
-  for (const user of users) {
-    if (user.myAssets && user.myAssets.length > 0) {
-      for (let i = 0; i < user.myAssets.length; i++) {
-        const assetId = user.myAssets[i].assetId;
-        const asset = await assetsCollection.findOne({ _id: new ObjectId(assetId) });
-        if (asset) {
-          await usersCollection.updateOne(
-            { _id: user._id, "myAssets.assetId": assetId },
-            {
-              $set: {
-                "myAssets.$.assetName": asset.productName,
-                "myAssets.$.assetType": asset.productType,
-                "myAssets.$.assetImage": asset.productImage || "",
-                "myAssets.$.companyName": asset.companyName || "",
-                "myAssets.$.status": "approved",
-                "myAssets.$.assignmentDate": asset.dateAdded
-              }
-            }
-          );
-        }
-      }
-    }
-  }
-  console.log("All myAssets updated successfully!");
-}
+//   for (const user of users) {
+//     if (user.myAssets && user.myAssets.length > 0) {
+//       for (let i = 0; i < user.myAssets.length; i++) {
+//         const assetId = user.myAssets[i].assetId;
+//         const asset = await assetsCollection.findOne({ _id: new ObjectId(assetId) });
+//         if (asset) {
+//           await usersCollection.updateOne(
+//             { _id: user._id, "myAssets.assetId": assetId },
+//             {
+//               $set: {
+//                 "myAssets.$.assetName": asset.productName,
+//                 "myAssets.$.assetType": asset.productType,
+//                 "myAssets.$.assetImage": asset.productImage || "",
+//                 "myAssets.$.companyName": asset.companyName || "",
+//                 "myAssets.$.status": "approved",
+//                 "myAssets.$.assignmentDate": asset.dateAdded
+//               }
+//             }
+//           );
+//         }
+//       }
+//     }
+//   }
+//   console.log("All myAssets updated successfully!");
+// }
 
 
 async function startServer() {
   try {
-    await client.connect();
+  
     console.log("MongoDB Connected");
 
     const db = client.db("assetverse");
@@ -84,9 +85,7 @@ async function startServer() {
      const assetsCollection = db.collection("assets")
       const requestsCollection = db.collection("requests")
       const assignedUsersCollection = db.collection("assignedUsers");
-    app.get("/", (req, res) => {
-      res.send("AssetVerse Backend Running");
-    });
+  
 
      // role middlewares
     const verifyHR = async (req, res, next) => {
@@ -943,13 +942,17 @@ app.get("/team-members/:employeeEmail", async (req, res) => {
     res.status(500).send({ success: false, message: "Failed to fetch team members" });
   }
 });
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+  
 
   } catch (error) {
     console.log("Database Connection Failed:", error);
   }
 }
+  app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  app.get("/", (req, res) => {
+      res.send("AssetVerse Backend Running");
+    });
 
 startServer();
